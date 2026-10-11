@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en-us">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Unity WebGL Player | NIGHT OF THE CONSUMERS</title>
+
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+    }
+
+    #unity-canvas {
+      position: fixed;
+      inset: 0;
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      border: 0;
+      outline: none;
+      background: #000;
+      cursor: crosshair;
+      touch-action: none;
+    }
+  </style>
+</head>
+
+<body>
+  <canvas id="unity-canvas" tabindex="0"></canvas>
+
+  <script src="Build/WebGL.loader.js"></script>
+
+  <script>
+    (() => {
+      const canvas = document.getElementById("unity-canvas");
+      let lockRequestPending = false;
+
+      function resizeCanvas() {
+        canvas.style.width = window.innerWidth + "px";
+        canvas.style.height = window.innerHeight + "px";
+      }
+
+      window.addEventListener("resize", resizeCanvas);
+      resizeCanvas();
+
+      function requestGamePointerLock() {
+        if (
+          document.pointerLockElement === canvas ||
+          lockRequestPending
+        ) {
+          return;
+        }
+
+        if (typeof canvas.requestPointerLock !== "function") {
+          console.warn("[Pointer Lock] Not supported by this browser.");
+          return;
+        }
+
+        lockRequestPending = true;
+
+        try {
+          const result = canvas.requestPointerLock();
+
+          if (result && typeof result.then === "function") {
+            result
+              .catch((error) => {
+                console.warn("[Pointer Lock] Request failed:", error);
+              })
+              .finally(() => {
+                lockRequestPending = false;
+              });
+          } else {
+            lockRequestPending = false;
+          }
+        } catch (error) {
+          lockRequestPending = false;
+          console.warn("[Pointer Lock] Request failed:", error);
+        }
+      }
+
+      // Browser permission is requested directly from the user's action.
+      canvas.addEventListener("mousedown", () => {
+        canvas.focus();
+        requestGamePointerLock();
+      });
+
+      document.addEventListener("pointerlockchange", () => {
+        const active = document.pointerLockElement === canvas;
+
+        console.log("[Pointer Lock]", active ? "Active" : "Inactive");
+        canvas.style.cursor = active ? "none" : "crosshair";
+      });
+
+      document.addEventListener("pointerlockerror", () => {
+        lockRequestPending = false;
+        console.warn("[Pointer Lock] The browser rejected the request.");
+      });
+
+      // Diagnostic: confirms whether the browser receives mouse movement.
+      document.addEventListener("mousemove", (event) => {
+        if (document.pointerLockElement === canvas) {
+          if (event.movementX !== 0 || event.movementY !== 0) {
+            // Uncomment the next line temporarily if you need to inspect values.
+            // console.log("[Mouse movement]", event.movementX, event.movementY);
+          }
+        }
+      });
+
+      createUnityInstance(canvas, {
+        dataUrl: "Build/WebGL.data",
+        frameworkUrl: "Build/WebGL.framework.js",
+        codeUrl: "Build/WebGL.wasm",
+        streamingAssetsUrl: "StreamingAssets",
+        companyName: "germfood",
+        productName: "NIGHT OF THE CONSUMERS",
+        productVersion: "1.0",
+        matchWebGLToCanvasSize: true,
+        devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2)
+      })
+      .then((unityInstance) => {
+        window.unityInstance = unityInstance;
+        console.log("[Unity] NIGHT OF THE CONSUMERS loaded.");
+      })
+      .catch((error) => {
+        console.error("[Unity] Failed to load:", error);
+      });
+    })();
+  </script>
+</body>
+</html>
+
