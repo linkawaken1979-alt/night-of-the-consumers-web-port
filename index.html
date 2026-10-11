@@ -17,6 +17,8 @@
       height: 100%;
       overflow: hidden;
       background: #000;
+      color: #fff;
+      font-family: Arial, Helvetica, sans-serif;
     }
 
     #unity-canvas {
@@ -31,18 +33,129 @@
       cursor: crosshair;
       touch-action: none;
     }
+
+    #loading-screen {
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      background: #000;
+      transition: opacity .35s ease;
+    }
+
+    #loading-screen.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    #unity-logo {
+      width: min(180px, 42vw);
+      max-height: 100px;
+      object-fit: contain;
+      margin-bottom: 25px;
+      filter: grayscale(1);
+    }
+
+    #game-title {
+      margin-bottom: 22px;
+      font-size: clamp(16px, 3vw, 23px);
+      font-weight: 700;
+      letter-spacing: 4px;
+      text-align: center;
+    }
+
+    #progress-container {
+      width: min(340px, 75vw);
+      height: 5px;
+      background: #252525;
+      overflow: hidden;
+      margin-bottom: 15px;
+    }
+
+    #progress-bar {
+      width: 0%;
+      height: 100%;
+      background: #fff;
+      transition: width .15s linear;
+    }
+
+    #loading-status {
+      width: min(340px, 75vw);
+      min-height: 18px;
+      color: #aaa;
+      font-size: 12px;
+      letter-spacing: 1px;
+      text-align: center;
+      overflow-wrap: anywhere;
+    }
+
+    #loading-percent {
+      margin-top: 9px;
+      color: #666;
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #loading-error {
+      display: none;
+      width: min(500px, 85vw);
+      margin-top: 20px;
+      color: #ff6666;
+      font-size: 12px;
+      line-height: 1.6;
+      text-align: center;
+      overflow-wrap: anywhere;
+    }
   </style>
 </head>
 
 <body>
   <canvas id="unity-canvas" tabindex="0"></canvas>
 
+  <div id="loading-screen">
+    <img id="unity-logo" src="TemplateData/unity-logo-light.png" alt="Unity">
+    <div id="game-title">NIGHT OF THE CONSUMERS</div>
+
+    <div id="progress-container">
+      <div id="progress-bar"></div>
+    </div>
+
+    <div id="loading-status">INITIALIZING...</div>
+    <div id="loading-percent">0%</div>
+    <div id="loading-error"></div>
+  </div>
+
   <script src="Build/WebGL.loader.js"></script>
 
   <script>
     (() => {
       const canvas = document.getElementById("unity-canvas");
+      const loadingScreen = document.getElementById("loading-screen");
+      const progressBar = document.getElementById("progress-bar");
+      const statusText = document.getElementById("loading-status");
+      const percentText = document.getElementById("loading-percent");
+      const errorText = document.getElementById("loading-error");
+
       let lockRequestPending = false;
+
+      function setLoading(percent, message) {
+        const value = Math.max(0, Math.min(100, percent));
+        progressBar.style.width = value + "%";
+        percentText.textContent = Math.round(value) + "%";
+        statusText.textContent = message;
+      }
+
+      function showError(error) {
+        console.error("[Unity] Failed to load:", error);
+        statusText.textContent = "LOADING FAILED";
+        errorText.style.display = "block";
+        errorText.textContent =
+          (error && error.message ? error.message : String(error)) +
+          " — Check the browser console and file URLs.";
+      }
 
       function resizeCanvas() {
         canvas.style.width = window.innerWidth + "px";
@@ -56,12 +169,10 @@
         if (
           document.pointerLockElement === canvas ||
           lockRequestPending
-        ) {
-          return;
-        }
+        ) return;
 
         if (typeof canvas.requestPointerLock !== "function") {
-          console.warn("[Pointer Lock] Not supported by this browser.");
+          console.warn("[Pointer Lock] Not supported.");
           return;
         }
 
@@ -71,13 +182,11 @@
           const result = canvas.requestPointerLock();
 
           if (result && typeof result.then === "function") {
-            result
-              .catch((error) => {
-                console.warn("[Pointer Lock] Request failed:", error);
-              })
-              .finally(() => {
-                lockRequestPending = false;
-              });
+            result.catch(error => {
+              console.warn("[Pointer Lock] Request failed:", error);
+            }).finally(() => {
+              lockRequestPending = false;
+            });
           } else {
             lockRequestPending = false;
           }
@@ -87,7 +196,6 @@
         }
       }
 
-      // Browser permission is requested directly from the user's action.
       canvas.addEventListener("mousedown", () => {
         canvas.focus();
         requestGamePointerLock();
@@ -95,44 +203,142 @@
 
       document.addEventListener("pointerlockchange", () => {
         const active = document.pointerLockElement === canvas;
-
         console.log("[Pointer Lock]", active ? "Active" : "Inactive");
         canvas.style.cursor = active ? "none" : "crosshair";
       });
 
       document.addEventListener("pointerlockerror", () => {
         lockRequestPending = false;
-        console.warn("[Pointer Lock] The browser rejected the request.");
+        console.warn("[Pointer Lock] Browser rejected the request.");
       });
 
-      // Diagnostic: confirms whether the browser receives mouse movement.
-      document.addEventListener("mousemove", (event) => {
-        if (document.pointerLockElement === canvas) {
-          if (event.movementX !== 0 || event.movementY !== 0) {
-            // Uncomment the next line temporarily if you need to inspect values.
-            // console.log("[Mouse movement]", event.movementX, event.movementY);
+      /*
+       * Split WASM loader.
+       * Expected files:
+       * Build/WebGL.wasm.__chunk__0
+       * Build/WebGL.wasm.__chunk__1
+       *
+       * Set the exact number of chunks below.
+       */
+      const WASM_CHUNK_COUNT = 2;
+      const WASM_CHUNK_SIZE = 20 * 1024 * 1024;
+
+      async function loadSplitWasm() {
+        const chunks = [];
+        let totalBytes = 0;
+
+        for (let i = 0; i < WASM_CHUNK_COUNT; i++) {
+          const url = "Build/WebGL.wasm.__chunk__" + i;
+
+          setLoading(
+            3 + (i / WASM_CHUNK_COUNT) * 22,
+            "DOWNLOADING WASM PART " + (i + 1) +
+            " / " + WASM_CHUNK_COUNT + "..."
+          );
+
+          const response = await fetch(url);
+
+          if (!response.ok) {
+            throw new Error(
+              "Could not download " + url +
+              " (HTTP " + response.status + ")"
+            );
           }
-        }
-      });
 
-      createUnityInstance(canvas, {
-        dataUrl: "Build/WebGL.data",
-        frameworkUrl: "Build/WebGL.framework.js",
-        codeUrl: "Build/WebGL.wasm",
-        streamingAssetsUrl: "StreamingAssets",
-        companyName: "germfood",
-        productName: "NIGHT OF THE CONSUMERS",
-        productVersion: "1.0",
-        matchWebGLToCanvasSize: true,
-        devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2)
-      })
-      .then((unityInstance) => {
-        window.unityInstance = unityInstance;
-        console.log("[Unity] NIGHT OF THE CONSUMERS loaded.");
-      })
-      .catch((error) => {
-        console.error("[Unity] Failed to load:", error);
-      });
+          const chunk = await response.arrayBuffer();
+
+          if (chunk.byteLength === 0) {
+            throw new Error("Empty WASM chunk: " + url);
+          }
+
+          if (i < WASM_CHUNK_COUNT - 1 &&
+              chunk.byteLength !== WASM_CHUNK_SIZE) {
+            console.warn(
+              "[WASM] Chunk", i, "is",
+              chunk.byteLength, "bytes; expected",
+              WASM_CHUNK_SIZE
+            );
+          }
+
+          chunks.push(chunk);
+          totalBytes += chunk.byteLength;
+
+          console.log(
+            "[WASM] Downloaded chunk", i,
+            chunk.byteLength, "bytes"
+          );
+        }
+
+        setLoading(27, "COMBINING WASM PARTS...");
+
+        const combined = new Uint8Array(totalBytes);
+        let offset = 0;
+
+        for (const chunk of chunks) {
+          combined.set(new Uint8Array(chunk), offset);
+          offset += chunk.byteLength;
+        }
+
+        console.log("[WASM] Combined size:", totalBytes, "bytes");
+        setLoading(30, "WASM READY");
+        return URL.createObjectURL(
+          new Blob([combined], { type: "application/wasm" })
+        );
+      }
+
+      async function startUnity() {
+        try {
+          setLoading(1, "INITIALIZING...");
+
+          const wasmBlobUrl = await loadSplitWasm();
+
+          setLoading(32, "STARTING UNITY...");
+
+          const config = {
+            dataUrl: "Build/WebGL.data",
+            frameworkUrl: "Build/WebGL.framework.js",
+            codeUrl: wasmBlobUrl,
+            streamingAssetsUrl: "StreamingAssets",
+            companyName: "germfood",
+            productName: "NIGHT OF THE CONSUMERS",
+            productVersion: "1.0",
+            matchWebGLToCanvasSize: true,
+            devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2)
+          };
+
+          const unityInstance = await createUnityInstance(
+            canvas,
+            config,
+            progress => {
+              const percent = 32 + progress * 68;
+              setLoading(
+                percent,
+                progress < 1
+                  ? "LOADING GAME... " + Math.round(progress * 100) + "%"
+                  : "STARTING GAME..."
+              );
+            }
+          );
+
+          window.unityInstance = unityInstance;
+          URL.revokeObjectURL(wasmBlobUrl);
+
+          setLoading(100, "READY");
+          console.log("[Unity] NIGHT OF THE CONSUMERS loaded.");
+
+          setTimeout(() => {
+            loadingScreen.classList.add("hidden");
+            setTimeout(() => {
+              loadingScreen.style.display = "none";
+            }, 400);
+          }, 250);
+
+        } catch (error) {
+          showError(error);
+        }
+      }
+
+      startUnity();
     })();
   </script>
 </body>
