@@ -116,7 +116,7 @@
   <canvas id="unity-canvas" tabindex="0"></canvas>
 
   <div id="loading-screen">
-    <img id="unity-logo" src="TemplateData/unity-logo-light.png" alt="Unity">
+    <img id="unity-logo" src="https://raw.githack.com/linkawaken1979-alt/night-of-the-consumers-web-port/main/TemplateData/unity-logo-light.png" alt="Unity">
     <div id="game-title">NIGHT OF THE CONSUMERS</div>
 
     <div id="progress-container">
@@ -128,8 +128,6 @@
     <div id="loading-error"></div>
   </div>
 
-  <script src="Build/WebGL.loader.js"></script>
-
   <script>
     (() => {
       const canvas = document.getElementById("unity-canvas");
@@ -139,7 +137,124 @@
       const percentText = document.getElementById("loading-percent");
       const errorText = document.getElementById("loading-error");
 
-      let lockRequestPending = false;
+      const repoBase = "https://raw.githack.com/linkawaken1979-alt/night-of-the-consumers-web-port/main";
+      const buildUrl = repoBase + "/Build";
+
+      (function() {
+        let lastLockAttempt = 0;
+        let isUserInitiated = false;
+        let virtualX = window.innerWidth / 2;
+        let virtualY = window.innerHeight / 2;
+
+        const nativeExitLock = document.exitPointerLock;
+        document.exitPointerLock = function() {
+          if (!isUserInitiated) {
+            console.warn("[PointerLock] Intercepted programmatic exitPointerLock from Unity.");
+            return;
+          }
+          return nativeExitLock.apply(document, arguments);
+        };
+
+        window.addEventListener("keydown", function(e) {
+          if (e.key === "Escape" || e.keyCode === 27) {
+            isUserInitiated = true;
+            nativeExitLock.call(document);
+            setTimeout(() => { isUserInitiated = false; }, 100);
+          }
+        });
+
+        function safeRequestLock() {
+          const now = performance.now();
+          if (document.pointerLockElement === canvas) return;
+          if (now - lastLockAttempt < 1200) return;
+
+          lastLockAttempt = now;
+          canvas.focus();
+
+          try {
+            const res = canvas.requestPointerLock();
+            if (res && typeof res.catch === 'function') {
+              res.catch((err) => {
+                console.warn("[PointerLock] Lock deferred by browser:", err.message);
+              });
+            }
+          } catch(e) {}
+        }
+
+        window.addEventListener("click", safeRequestLock, true);
+        canvas.addEventListener("mousedown", safeRequestLock, true);
+
+        const origAddEventListener = EventTarget.prototype.addEventListener;
+        EventTarget.prototype.addEventListener = function(type, listener, options) {
+          if (type === 'mousemove' && typeof listener === 'function') {
+            const wrappedListener = function(event) {
+              if (document.pointerLockElement === canvas) {
+                let dx = event.movementX || event.mozMovementX || event.webkitMovementX || 0;
+                let dy = event.movementY || event.mozMovementY || event.webkitMovementY || 0;
+
+                if (Math.abs(dx) > 250 || Math.abs(dy) > 250) {
+                  dx = 0;
+                  dy = 0;
+                }
+
+                virtualX += dx;
+                virtualY += dy;
+
+                Object.defineProperty(event, 'movementX', { value: dx, configurable: true });
+                Object.defineProperty(event, 'movementY', { value: dy, configurable: true });
+                Object.defineProperty(event, 'clientX', { value: virtualX, configurable: true });
+                Object.defineProperty(event, 'clientY', { value: virtualY, configurable: true });
+                Object.defineProperty(event, 'screenX', { value: virtualX, configurable: true });
+                Object.defineProperty(event, 'screenY', { value: virtualY, configurable: true });
+              }
+              return listener.apply(this, arguments);
+            };
+            return origAddEventListener.call(this, type, wrappedListener, options);
+          }
+          return origAddEventListener.call(this, type, listener, options);
+        };
+
+        document.addEventListener('pointerlockchange', function() {
+          const locked = document.pointerLockElement === canvas;
+          canvas.style.cursor = locked ? "none" : "crosshair";
+          if (locked) {
+            virtualX = window.innerWidth / 2;
+            virtualY = window.innerHeight / 2;
+          }
+        });
+      })();
+
+      (function() {
+        var originalConsoleError = console.error;
+        console.error = function() {
+          var msg = arguments[0] ? arguments[0].toString() : "";
+          if (msg.indexOf("Set Method not found for 'mesh'") !== -1) return;
+          originalConsoleError.apply(console, arguments);
+        };
+      })();
+
+      (function() {
+        var open = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url) {
+          if (typeof url === 'string' && url.indexOf("http") !== 0) {
+            if (url.indexOf("Build/") !== -1) {
+              url = buildUrl + "/" + url.substring(url.indexOf("Build/") + 6);
+            }
+          }
+          return open.apply(this, arguments);
+        };
+
+        var originalFetch = window.fetch;
+        window.fetch = function(resource, init) {
+          var url = typeof resource === 'string' ? resource : (resource ? resource.url : '');
+          if (typeof url === 'string' && url.indexOf("http") !== 0) {
+            if (url.indexOf("Build/") !== -1) {
+              url = buildUrl + "/" + url.substring(url.indexOf("Build/") + 6);
+            }
+          }
+          return originalFetch(url, init);
+        };
+      })();
 
       function setLoading(percent, message) {
         const value = Math.max(0, Math.min(100, percent));
@@ -165,83 +280,25 @@
       window.addEventListener("resize", resizeCanvas);
       resizeCanvas();
 
-      function requestGamePointerLock() {
-        if (
-          document.pointerLockElement === canvas ||
-          lockRequestPending
-        ) return;
-
-        if (typeof canvas.requestPointerLock !== "function") {
-          console.warn("[Pointer Lock] Not supported.");
-          return;
-        }
-
-        lockRequestPending = true;
-
-        try {
-          const result = canvas.requestPointerLock();
-
-          if (result && typeof result.then === "function") {
-            result.catch(error => {
-              console.warn("[Pointer Lock] Request failed:", error);
-            }).finally(() => {
-              lockRequestPending = false;
-            });
-          } else {
-            lockRequestPending = false;
-          }
-        } catch (error) {
-          lockRequestPending = false;
-          console.warn("[Pointer Lock] Request failed:", error);
-        }
-      }
-
-      canvas.addEventListener("mousedown", () => {
-        canvas.focus();
-        requestGamePointerLock();
-      });
-
-      document.addEventListener("pointerlockchange", () => {
-        const active = document.pointerLockElement === canvas;
-        console.log("[Pointer Lock]", active ? "Active" : "Inactive");
-        canvas.style.cursor = active ? "none" : "crosshair";
-      });
-
-      document.addEventListener("pointerlockerror", () => {
-        lockRequestPending = false;
-        console.warn("[Pointer Lock] Browser rejected the request.");
-      });
-
-      /*
-       * Split WASM loader.
-       * Expected files:
-       * Build/WebGL.wasm.__chunk__0
-       * Build/WebGL.wasm.__chunk__1
-       *
-       * Set the exact number of chunks below.
-       */
       const WASM_CHUNK_COUNT = 2;
-      const WASM_CHUNK_SIZE = 20 * 1024 * 1024;
 
       async function loadSplitWasm() {
         const chunks = [];
         let totalBytes = 0;
 
         for (let i = 0; i < WASM_CHUNK_COUNT; i++) {
-          const url = "Build/WebGL.wasm.__chunk__" + i;
+          const url = buildUrl + "/WebGL.wasm.__chunk__" + i;
 
           setLoading(
             3 + (i / WASM_CHUNK_COUNT) * 22,
-            "DOWNLOADING WASM PART " + (i + 1) +
-            " / " + WASM_CHUNK_COUNT + "..."
+            "DOWNLOADING WASM PART " + (i + 1) + " / " + WASM_CHUNK_COUNT + "..."
           );
 
           const response = await fetch(url);
 
           if (!response.ok) {
             throw new Error(
-              "Could not download " + url +
-              " (HTTP " + response.status + ")"
+              "Could not download " + url + " (HTTP " + response.status + ")"
             );
           }
 
@@ -251,22 +308,8 @@
             throw new Error("Empty WASM chunk: " + url);
           }
 
-          if (i < WASM_CHUNK_COUNT - 1 &&
-              chunk.byteLength !== WASM_CHUNK_SIZE) {
-            console.warn(
-              "[WASM] Chunk", i, "is",
-              chunk.byteLength, "bytes; expected",
-              WASM_CHUNK_SIZE
-            );
-          }
-
           chunks.push(chunk);
           totalBytes += chunk.byteLength;
-
-          console.log(
-            "[WASM] Downloaded chunk", i,
-            chunk.byteLength, "bytes"
-          );
         }
 
         setLoading(27, "COMBINING WASM PARTS...");
@@ -279,7 +322,6 @@
           offset += chunk.byteLength;
         }
 
-        console.log("[WASM] Combined size:", totalBytes, "bytes");
         setLoading(30, "WASM READY");
         return URL.createObjectURL(
           new Blob([combined], { type: "application/wasm" })
@@ -294,11 +336,20 @@
 
           setLoading(32, "STARTING UNITY...");
 
+          await new Promise((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = buildUrl + "/WebGL.loader.js";
+            script.crossOrigin = "anonymous";
+            script.onload = resolve;
+            script.onerror = () => reject(new Error("Failed to load WebGL.loader.js from GitHack"));
+            document.body.appendChild(script);
+          });
+
           const config = {
-            dataUrl: "Build/WebGL.data",
-            frameworkUrl: "Build/WebGL.framework.js",
+            dataUrl: buildUrl + "/WebGL.data",
+            frameworkUrl: buildUrl + "/WebGL.framework.js",
             codeUrl: wasmBlobUrl,
-            streamingAssetsUrl: "StreamingAssets",
+            streamingAssetsUrl: repoBase + "/StreamingAssets",
             companyName: "germfood",
             productName: "NIGHT OF THE CONSUMERS",
             productVersion: "1.0",
@@ -324,12 +375,12 @@
           URL.revokeObjectURL(wasmBlobUrl);
 
           setLoading(100, "READY");
-          console.log("[Unity] NIGHT OF THE CONSUMERS loaded.");
 
           setTimeout(() => {
             loadingScreen.classList.add("hidden");
             setTimeout(() => {
               loadingScreen.style.display = "none";
+              canvas.focus();
             }, 400);
           }, 250);
 
@@ -343,4 +394,3 @@
   </script>
 </body>
 </html>
-
